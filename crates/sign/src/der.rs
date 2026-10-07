@@ -32,6 +32,9 @@ pub mod tag {
     }
 }
 
+/// Nesting limit for untrusted input.
+const MAX_DEPTH: usize = 64;
+
 fn bad(what: &str) -> SignError {
     SignError::Malformed(what.to_string())
 }
@@ -48,20 +51,57 @@ pub struct Tlv<'a> {
 
 impl<'a> Tlv<'a> {
     /// Parse one element at the start of `input`; returns it and the rest.
+    ///
+    /// Reads BER as well as DER, as CMS signers in the wild write it: indefinite lengths
+    /// (`30 80 … 00 00`), long-form lengths with leading zeros and multi-byte tags. For an
+    /// indefinite element `value` excludes the end-of-contents octets and `raw` includes them.
     pub fn parse(input: &'a [u8]) -> Result<(Tlv<'a>, &'a [u8]), SignError> {
-        let (&tag, rest) = input.split_first().ok_or_else(|| bad("truncated DER"))?;
+        Tlv::parse_depth(input, 0)
+    }
+
+    fn parse_depth(input: &'a [u8], depth: usize) -> Result<(Tlv<'a>, &'a [u8]), SignError> {
+        if depth > MAX_DEPTH {
+            return Err(bad("DER nesting too deep"));
+        }
+        let (&tag, mut rest) = input.split_first().ok_or_else(|| bad("truncated DER"))?;
         if tag & 0x1F == 0x1F {
-            return Err(bad("multi-byte DER tags are not supported"));
+            // High tag number: base-128 digits, last one without the continuation bit. Callers
+            // only see the first octet, which is enough to skip such elements.
+            loop {
+                let (&b, r) = rest.split_first().ok_or_else(|| bad("truncated DER tag"))?;
+                rest = r;
+                if b & 0x80 == 0 {
+                    break;
+                }
+            }
         }
         let (&first, rest) = rest.split_first().ok_or_else(|| bad("truncated DER length"))?;
+        if first == 0x80 {
+            if tag & 0x20 == 0 {
+                return Err(bad("indefinite length on a primitive element"));
+            }
+            let content_start = input.len() - rest.len();
+            let mut cur = rest;
+            loop {
+                if let [0, 0, ..] = cur {
+                    let used = rest.len() - cur.len();
+                    let value = &rest[..used];
+                    let end = content_start + used + 2;
+                    return Ok((Tlv { tag, value, raw: &input[..end] }, &cur[2..]));
+                }
+                let (_, r) = Tlv::parse_depth(cur, depth + 1)?;
+                cur = r;
+            }
+        }
         let (len, rest) = if first < 0x80 {
             (first as usize, rest)
         } else {
             let n = (first & 0x7F) as usize;
-            if n == 0 || n > 4 || rest.len() < n {
-                return Err(bad("unsupported DER length"));
+            let digits = rest.get(..n).ok_or_else(|| bad("truncated DER length"))?;
+            let mut len = 0usize;
+            for b in digits {
+                len = len.checked_mul(256).and_then(|l| l.checked_add(*b as usize)).ok_or_else(|| bad("DER length too large"))?;
             }
-            let len = rest[..n].iter().fold(0usize, |acc, b| (acc << 8) | *b as usize);
             (len, &rest[n..])
         };
         if rest.len() < len {
@@ -69,6 +109,26 @@ impl<'a> Tlv<'a> {
         }
         let header = input.len() - rest.len();
         Ok((Tlv { tag, value: &rest[..len], raw: &input[..header + len] }, &rest[len..]))
+    }
+
+    /// Whether this element is written with an indefinite length (BER, not DER).
+    pub fn is_indefinite(&self) -> bool {
+        self.raw.get(1) == Some(&0x80)
+    }
+
+    /// The bytes of an OCTET STRING, joining the segments of a constructed (BER) one.
+    pub fn octets(&self) -> Result<std::borrow::Cow<'a, [u8]>, SignError> {
+        if self.tag == tag::OCTET_STRING {
+            return Ok(std::borrow::Cow::Borrowed(self.value));
+        }
+        if self.tag != tag::OCTET_STRING | 0x20 {
+            return Err(bad("expected an OCTET STRING"));
+        }
+        let mut out = Vec::new();
+        for part in self.children()? {
+            out.extend_from_slice(&part.octets()?);
+        }
+        Ok(std::borrow::Cow::Owned(out))
     }
 
     /// Parse `input` as exactly one element.
@@ -437,6 +497,33 @@ mod tests {
         let s = set_of(&[&int(2), &int(1)]);
         assert_eq!(s, vec![0x31, 6, 2, 1, 1, 2, 1, 2]);
         assert!(Tlv::parse(&[0x30, 5, 1]).is_err());
+    }
+
+    #[test]
+    fn reads_ber() {
+        // Indefinite SEQUENCE { INTEGER 1, indefinite [0] { OCTET STRING "ab" } }.
+        let ber = [0x30, 0x80, 2, 1, 1, 0xA0, 0x80, 4, 2, b'a', b'b', 0, 0, 0, 0, 0xFF];
+        let (t, rest) = Tlv::parse(&ber).unwrap();
+        assert_eq!(rest, &[0xFF]);
+        assert!(t.is_indefinite());
+        assert_eq!(t.raw.len(), 15);
+        let kids = t.children().unwrap();
+        assert_eq!(kids.len(), 2);
+        assert_eq!(kids[1].inner().unwrap().value, b"ab");
+        // Constructed OCTET STRING in two segments; long-form length with a leading zero.
+        let c = [0x24, 0x81, 0x08, 4, 1, b'x', 4, 1, b'y', 4, 0];
+        assert_eq!(Tlv::parse_all(&c).unwrap().octets().unwrap().as_ref(), b"xy");
+        let padded = [0x04, 0x82, 0x00, 0x01, 0x7F];
+        assert_eq!(Tlv::parse_all(&padded).unwrap().value, &[0x7F]);
+        // Never-crash: missing end-of-contents, primitive indefinite, nesting bombs, huge lengths.
+        assert!(Tlv::parse(&[0x30, 0x80, 2, 1, 1]).is_err());
+        assert!(Tlv::parse(&[0x04, 0x80, 0, 0]).is_err());
+        assert!(Tlv::parse(&[0x30, 0x88, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]).is_err());
+        let bomb: Vec<u8> = std::iter::repeat_n([0x30u8, 0x80], 10_000).flatten().collect();
+        assert!(Tlv::parse(&bomb).is_err());
+        // High tag number is consumed.
+        let (h, _) = Tlv::parse(&[0x5F, 0x81, 0x01, 1, 0xAA]).unwrap();
+        assert_eq!(h.value, &[0xAA]);
     }
 
     #[test]

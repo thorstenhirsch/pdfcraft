@@ -50,6 +50,8 @@ pub struct SignedData {
     pub signer: SignerInfo,
     /// Encapsulated content (`adbe.pkcs7.sha1` carries the document digest here).
     pub content: Option<Vec<u8>>,
+    /// Encoding irregularities that were tolerated (BER instead of DER, …), for the details.
+    pub quirks: Vec<&'static str>,
 }
 
 fn bad(what: &str) -> SignError {
@@ -61,6 +63,10 @@ impl SignedData {
     /// padding) are ignored.
     pub fn parse(bytes: &[u8]) -> Result<SignedData, SignError> {
         let (ci, _) = Tlv::parse(bytes)?;
+        let mut quirks = Vec::new();
+        if ci.is_indefinite() {
+            quirks.push("The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.");
+        }
         let ci = ci.expect(tag::SEQUENCE, "ContentInfo")?.children()?;
         let [ct, content] = ci.as_slice() else { return Err(bad("ContentInfo")) };
         if ct.oid()? != SIGNED_DATA {
@@ -73,9 +79,8 @@ impl SignedData {
         let encap = it.next().ok_or_else(|| bad("encapContentInfo"))?.children()?;
         let content = match encap.get(1) {
             Some(c) if c.tag == tag::ctx(0) => {
-                let inner = c.inner()?;
-                // Constructed OCTET STRINGs (BER) are not expected in DER-signed PDFs.
-                Some(inner.expect(tag::OCTET_STRING, "eContent")?.value.to_vec())
+                // BER signers may split the content into a constructed OCTET STRING.
+                Some(c.inner()?.octets()?.into_owned())
             }
             _ => None,
         };
@@ -99,7 +104,7 @@ impl SignedData {
         }
         let infos = signer_infos.ok_or_else(|| bad("no signerInfos"))?.children()?;
         let si = infos.first().ok_or_else(|| bad("no signer"))?;
-        Ok(SignedData { certificates, signer: parse_signer(si)?, content })
+        Ok(SignedData { certificates, signer: parse_signer(si)?, content, quirks })
     }
 
     /// The signer's certificate among those carried.
@@ -112,14 +117,25 @@ impl SignedData {
 
     /// Check the signature value with `cert`'s key. `content_digest` is the digest of the
     /// signed content (the document byte ranges) when there are no signed attributes.
-    pub fn verify_signature(&self, cert: &Certificate, content_digest: &[u8]) -> bool {
+    /// `Err(Unsupported)`: the signer's key algorithm can't be checked here.
+    pub fn verify_signature(&self, cert: &Certificate, content_digest: &[u8]) -> Result<bool, SignError> {
         let s = &self.signer;
-        let alg = s.scheme_digest.unwrap_or(s.digest);
-        let digest = match &s.signed_attrs {
-            Some(attrs) => alg.digest(&[attrs]),
-            None => content_digest.to_vec(),
-        };
-        cert.public_key.verify(s.scheme, alg, &digest, &s.signature).unwrap_or(false)
+        // The signature algorithm names the digest it used; a bare `rsaEncryption` / `ecPublicKey`
+        // uses the SignerInfo's digestAlgorithm. Some signers disagree, so try both.
+        let mut algs = vec![s.scheme_digest.unwrap_or(s.digest)];
+        if !algs.contains(&s.digest) {
+            algs.push(s.digest);
+        }
+        for alg in algs {
+            let digest = match &s.signed_attrs {
+                Some(attrs) => alg.digest(&[attrs]),
+                None => content_digest.to_vec(),
+            };
+            if cert.public_key.verify(s.scheme, alg, &digest, &s.signature)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -150,8 +166,11 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
     let (mut message_digest, mut content_type, mut signing_time, mut signing_certificate) = (None, None, None, false);
     if next.tag == tag::ctx(0) {
         // Signed over the DER SET OF, i.e. the same contents with the universal SET tag.
-        let mut set = next.raw.to_vec();
-        set[0] = tag::SET;
+        // (An indefinite-length encoding is re-encoded with a definite length.)
+        let mut set = if next.is_indefinite() { der::tlv(tag::SET, next.value) } else { next.raw.to_vec() };
+        if let Some(t) = set.first_mut() {
+            *t = tag::SET;
+        }
         for a in next.children()? {
             let p = a.children()?;
             let Some(o) = p.first().and_then(|o| o.oid().ok()) else { continue };
@@ -168,7 +187,7 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
         next = it.next().ok_or_else(|| bad("signatureAlgorithm"))?;
     }
     let (scheme, scheme_digest) = signature_algorithm(&next)?;
-    let signature = it.next().ok_or_else(|| bad("signature"))?.expect(tag::OCTET_STRING, "signature")?.value.to_vec();
+    let signature = it.next().ok_or_else(|| bad("signature"))?.octets()?.into_owned();
     let mut timestamp = false;
     let mut timestamp_token = None;
     for t in it {

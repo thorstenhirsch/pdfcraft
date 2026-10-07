@@ -67,6 +67,7 @@ fn bmp(password: &str) -> Vec<u8> {
 fn pkcs12_kdf(alg: DigestAlg, password: &[u8], salt: &[u8], id: u8, iterations: u32, n: usize) -> Vec<u8> {
     let (u, v) = match alg {
         DigestAlg::Sha1 => (20, 64),
+        DigestAlg::Sha224 => (28, 64),
         DigestAlg::Sha256 => (32, 64),
         DigestAlg::Sha384 => (48, 128),
         DigestAlg::Sha512 => (64, 128),
@@ -151,6 +152,7 @@ fn hmac(alg: DigestAlg, key: &[u8], data: &[u8]) -> Result<Vec<u8>, SignError> {
     }
     match alg {
         DigestAlg::Sha1 => run::<sha1::Sha1>(key, data),
+        DigestAlg::Sha224 => run::<sha2::Sha224>(key, data),
         DigestAlg::Sha256 => run::<sha2::Sha256>(key, data),
         DigestAlg::Sha384 => run::<sha2::Sha384>(key, data),
         DigestAlg::Sha512 => run::<sha2::Sha512>(key, data),
@@ -161,6 +163,7 @@ fn pbkdf2(prf: DigestAlg, password: &[u8], salt: &[u8], rounds: u32, len: usize)
     let mut out = vec![0u8; len];
     match prf {
         DigestAlg::Sha1 => pbkdf2::pbkdf2_hmac::<sha1::Sha1>(password, salt, rounds, &mut out),
+        DigestAlg::Sha224 => pbkdf2::pbkdf2_hmac::<sha2::Sha224>(password, salt, rounds, &mut out),
         DigestAlg::Sha256 => pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password, salt, rounds, &mut out),
         DigestAlg::Sha384 => pbkdf2::pbkdf2_hmac::<sha2::Sha384>(password, salt, rounds, &mut out),
         DigestAlg::Sha512 => pbkdf2::pbkdf2_hmac::<sha2::Sha512>(password, salt, rounds, &mut out),

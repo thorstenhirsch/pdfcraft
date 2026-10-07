@@ -35,3 +35,17 @@ openssl pkcs12 -export -inkey leaf.key -in leaf.crt -certfile ca.crt -out chain.
 `openssl cms -sign -binary -md sha256 -outform DER -signer rsa.crt -inkey rsa.key` over its
 byte ranges (`adbe.pkcs7.detached`, with OpenSSL's signing-time attribute). It checks the
 validator against a signature PdfCraft did not make; poppler's `pdfsig` reports it valid.
+
+### `x509-rsa-sha1.pdf`
+
+A synthetic one-page PDF signed the legacy way (`/SubFilter /adbe.x509.rsa_sha1`, `/Cert` = `rsa.crt.pem`,
+`/Contents` = a DER OCTET STRING with the PKCS #1 signature of the SHA-1 digest of the byte ranges), with
+the key of `rsa-aes.p12`. Built by writing the objects with a fixed-width `/ByteRange` and zero-filled
+`/Contents`, patching the byte range, then `openssl dgst -sha1 -sign rsa.key` over the two ranges.
+
+### RSA signature variants (hex constants in `tests/crypto.rs`)
+
+Over SHA-256("hello") with the key of `rsa-aes.p12`:
+`openssl dgst -sha256 -sign rsa.key` (standard DigestInfo); `openssl pkeyutl -sign -pkeyopt rsa_padding_mode:pkcs1`
+over a hand-built DigestInfo without the NULL parameter, and over the bare digest;
+`openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:0 -sign rsa.key`.

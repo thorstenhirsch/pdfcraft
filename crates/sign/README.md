@@ -38,7 +38,9 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   validity). `dss::embed` merges revocation evidence into the catalog's `/DSS` with `/VRI`
   entries keyed per signature (uppercase-hex SHA-1 of `/Contents`), deduplicating
   byte-identical blobs — sign → DSS → timestamp makes a B-LTA file, and the change classifier
-  treats the store as a permitted change. `revocation` parses and verifies RFC 5280 CRLs and
+  treats the store as a permitted change: only objects reached through `/Certs`, `/CRLs`,
+  `/OCSPs` and `/VRI` with the shape of their role, and new or only grown since the signature,
+  count (a `/DSS` entry naming a page's contents, or a `/Type /DSS` label, does not). `revocation` parses and verifies RFC 5280 CRLs and
   RFC 6960 OCSP responses (responder identity, OCSP-signing EKU for delegated responders,
   CertID hash matching, validity windows); validation checks embedded evidence against the
   signer's chain and a verified revocation invalidates the signature.
@@ -53,6 +55,15 @@ ECDSA P-256/P-384; the store integration is tested with software-backed keys.
   revisions are diffed against the signed one, and the changes are classified (signing, form
   fill, comments, metadata, page content, document structure) under the DocMDP permissions.
   The verdict follows Acrobat: valid, unknown (intact but the identity isn't trusted) or invalid.
+- **Liberal in what it reads, strict in what it checks.** The CMS is read as BER as well as DER
+  (indefinite lengths, constructed OCTET STRINGs, long-form lengths, high tags: what Windows
+  CryptoAPI, Adobe PPKMS, DocuSign and `openssl cms -stream` write), RSA PKCS #1 signatures with
+  or without the DigestInfo or its NULL, RSA-PSS with any salt length, ECDSA as DER, non-minimal
+  DER or raw `r ‖ s`, and `adbe.x509.rsa_sha1`. Digest and signature value are always checked
+  over the exact bytes. Every tolerated irregularity is listed in the signature's details. What
+  PdfCraft can't check (an unknown algorithm or curve) is *unknown*, never *invalid*.
+- **Validation algorithms:** SHA-1/224/256/384/512; RSA, ECDSA on P-256, P-384, P-521,
+  brainpoolP256r1 and brainpoolP384r1 (verification only for the last three).
 
 Oracles: poppler's `pdfsig` reports our signatures valid; OpenSSL reads our `.p12` files and
 verifies our CMS; `tests/data/openssl-signed.pdf` is a signature OpenSSL made, which we validate.

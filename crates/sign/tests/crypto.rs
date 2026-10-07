@@ -85,12 +85,12 @@ fn signatures_round_trip_for_every_key_type() {
         assert_eq!(signer, &id.certificate);
         assert_eq!(sd.signer.message_digest.as_deref(), Some(&digest[..]));
         assert!(sd.signer.signing_certificate, "CAdES signing-certificate-v2");
-        assert!(sd.verify_signature(signer, &digest), "{file}");
+        assert!(sd.verify_signature(signer, &digest).unwrap(), "{file}");
         assert_eq!(sd.certificates.len(), 1 + id.chain.len());
         // Tampering with the signature breaks it.
         let mut bad = sd.clone();
         bad.signer.signature[5] ^= 1;
-        assert!(!bad.verify_signature(signer, &digest), "{file}");
+        assert!(!bad.verify_signature(signer, &digest).unwrap(), "{file}");
     }
 }
 
@@ -113,7 +113,7 @@ fn new_digital_ids_are_self_signed_and_survive_a_p12_round_trip() {
         let d = DigestAlg::Sha256.digest(&[b"x"]);
         let sig = cms::sign_detached(&back.key, &back.certificate, &[], DigestAlg::Sha256, &d).unwrap();
         let sd = cms::SignedData::parse(&sig).unwrap();
-        assert!(sd.verify_signature(&back.certificate, &d));
+        assert!(sd.verify_signature(&back.certificate, &d).unwrap());
     }
 }
 
@@ -272,4 +272,133 @@ fn ocsp_responses_verify_and_match_the_certificate() {
     // An error response is rejected at parse time.
     let error = der::seq(&[&der::int(6)]);
     assert!(OcspResponse::parse(&error).is_err());
+}
+
+// ── tolerance for the encodings found in old and unusual signers ───────────────────────────────
+// RSA signatures over SHA-256("hello") by the key in rsa-aes.p12, made with OpenSSL 3 (see
+// tests/data/README.md): the standard DigestInfo, DigestInfo without the NULL parameter, the bare
+// digest, and RSASSA-PSS with a zero-length salt.
+const RSA_STD: &str = "40896f76bc460e4ae9dc523dfe136159c7ccc20eff09bfeeafd570fd41a6c016d6b2a1d771ba81642dd5bf94d2bb9c4aeead237ce0e1662678efd5ff7b8590bf7d5042f6541b001a9f7d688e60a9fde5c9b3f295bd5373aea1059b53f1341f30a4db68302161e95c6a62847205782edcd1fa99b6720eaa60b59d3f54d4ec7be396c8f1146fe35f198bd12dca608b8080a446f89ba300fd74f8df4e7f177c59dc48cf878451423dd9674df768a12f85a1b5e81a5b8df43ac0fb03c4393cfed7dceeeddf1c8aef9a37e738ff4169a6881e783c2f841fb974eb0e6ecedf649bf64fbc51920b7824d86b26527acaec5d0ebb44454606441fea2b7d7b7a6014ab9d64";
+const RSA_NO_NULL: &str = "a6589a056b04903cd77d5dae3b52f8c9905403ee2cef2e7343cfdd07746cbf1034c8c510a6f7258face9cfbcacb990e30f185dd091310d88efc3457e0fd34245d525e2cb5ceaab029e7b7fd25a581379c92e6abf90a36388cfc6afba0be47c99abc8b32e82a2c750ffe7c6d04de886cbfe63685cfc0f0204f641103e3c752496a0ae341fb503c4c2389824f7f20d07a03f0e3a95d5084fc1fb1b94c6bc607a14623b1bf7180b3d7d4592e217ba08698becb1994a6ef72ccab6e239418f11c57f184f59b0d1c7407216856cd4585da6a07354191ae85f8be02e670a10017f115ccb55d96f2ea2c1f095bbcf6b50ed8763945b78054989b016119c5371d918d682";
+const RSA_BARE: &str = "a5812c29d3edf0b567636aaa501a960b977e774a0ea941e41401611d8b63464e99e2e908d8d8452b97112597f06f2adee029109bf6e421eb57add689b518532232199151ed822d1766013ea44ae5cb468b4a2288cf866f8c5954b729bfd34a8ca82d73bb397a75eb76687f7d9e506dab32e2da6231ece307fe8eb929c7648f73de6dd81c38aecb78a0e7ef0e11654fbadef88c7b206079afee70db8054ada079c6456826383dfd2504f05033b58cf1610a180953e501e137b47de5a77914cfaa33b8c588f24dcdb5789e7d1288ff009918f6c2808bfa1c57398d2e007a5e6d3004a3ca568a4ae2eb5cfa14083099e81cfcb53ead9ec6650a7c58e441d117d439";
+const RSA_PSS_SALT0: &str = "2cdbb02d75a80df07dcca229363644caa4391cca30a3bc1281a3f4512dbe609727767c42e62cdad7d6bd38088b2c0b5dcb439fd2c337c31b47bbc39bda0e5c1486a773cde163fa2cad8047c06217541c993b21413e5cd341a4f66d2fb6e4755b52d25935dd90af667ce3d3e1825c8e6e40274dca7cf469ae17cbc3c1c1560d87a877a46353245128120beb1108cd0cafddae5b4ef9005601cc05f114da9de4cdaee08020d5b9be27e7b48f961e40664ef592990580bc1e1f2a8107c3d71d323df120720be6e862191a0aaa3b394b96efd2f45afa5f8211e2082865b8d3e3c28f99054976162ae8f42a903bfb82c17700db93fef603c4cd85c70a0be68fda9af8";
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+}
+
+#[test]
+fn rsa_signatures_are_read_with_every_digestinfo_variant() {
+    use pdfcraft_sign::keys::{DigestAlg, Scheme};
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let key = &id.certificate.public_key;
+    let digest = DigestAlg::Sha256.digest(&[b"hello"]);
+    for (name, sig) in [("standard", RSA_STD), ("no NULL", RSA_NO_NULL), ("bare digest", RSA_BARE)] {
+        assert!(key.verify(Scheme::RsaPkcs1, DigestAlg::Sha256, &digest, &unhex(sig)).unwrap(), "{name}");
+    }
+    // PSS with any salt length (the parameters aren't consulted for it).
+    assert!(key.verify(Scheme::RsaPss, DigestAlg::Sha256, &digest, &unhex(RSA_PSS_SALT0)).unwrap());
+    // The check itself is not relaxed: another digest, a flipped bit, or the wrong scheme fail.
+    let other = DigestAlg::Sha256.digest(&[b"hellp"]);
+    let mut flipped = unhex(RSA_STD);
+    flipped[7] ^= 1;
+    for sig in [RSA_STD, RSA_NO_NULL, RSA_BARE] {
+        assert!(!key.verify(Scheme::RsaPkcs1, DigestAlg::Sha256, &other, &unhex(sig)).unwrap());
+    }
+    assert!(!key.verify(Scheme::RsaPkcs1, DigestAlg::Sha256, &digest, &flipped).unwrap());
+    assert!(!key.verify(Scheme::RsaPss, DigestAlg::Sha256, &digest, &unhex(RSA_STD)).unwrap());
+}
+
+#[test]
+fn ecdsa_signatures_are_read_as_der_non_minimal_der_or_raw() {
+    use pdfcraft_sign::der::{self, Tlv};
+    use pdfcraft_sign::keys::{DigestAlg, Scheme};
+    for (file, field) in [("ec-p256.p12", 32usize), ("ec-p384.p12", 48)] {
+        let id = pkcs12::open(&data(file), "test").unwrap();
+        let alg = id.key.preferred_digest();
+        let msg = b"signed content";
+        let digest = alg.digest(&[msg]);
+        let sig = id.key.sign(alg, msg).unwrap();
+        let pk = id.key.public_key();
+        assert!(pk.verify(Scheme::Ecdsa, alg, &digest, &sig).unwrap(), "{file}: DER");
+        let ints = Tlv::parse_all(&sig).unwrap().children().unwrap();
+        let fixed = |i: &Tlv<'_>| {
+            let m = i.uint_bytes();
+            let mut v = vec![0u8; field - m.len()];
+            v.extend_from_slice(m);
+            v
+        };
+        let (r, s) = (fixed(&ints[0]), fixed(&ints[1]));
+        // Raw r ‖ s (PKCS #11 tokens).
+        let raw = [r.clone(), s.clone()].concat();
+        assert!(pk.verify(Scheme::Ecdsa, alg, &digest, &raw).unwrap(), "{file}: raw");
+        // Integers padded with redundant leading zeros.
+        let padded = |v: &[u8]| der::tlv(0x02, &[&[0u8, 0][..], v].concat());
+        let loose = der::seq(&[&padded(&r), &padded(&s)]);
+        assert!(pk.verify(Scheme::Ecdsa, alg, &digest, &loose).unwrap(), "{file}: non-minimal DER");
+        // Still a real check.
+        let mut bad = raw.clone();
+        bad[3] ^= 0x40;
+        assert!(!pk.verify(Scheme::Ecdsa, alg, &digest, &bad).unwrap());
+        assert!(!pk.verify(Scheme::Ecdsa, alg, &DigestAlg::Sha256.digest(&[b"other"]), &raw).unwrap());
+        assert!(!pk.verify(Scheme::Ecdsa, alg, &digest, &[1, 2, 3]).unwrap());
+    }
+}
+
+#[test]
+fn keys_of_unknown_algorithms_are_unsupported_not_wrong() {
+    use pdfcraft_sign::der::{self, Tlv};
+    use pdfcraft_sign::keys::{DigestAlg, Scheme};
+    // An Ed448 key (1.3.101.113), which isn't supported: the key parses, checking says "can't".
+    let spki = der::seq(&[&der::seq(&[&der::oid("1.3.101.113")]), &der::bit_string(&[7u8; 57])]);
+    let key = PublicKey::from_spki(&Tlv::parse_all(&spki).unwrap()).unwrap();
+    assert_eq!(key.spki(), spki);
+    assert!(key.describe().contains("unsupported"));
+    let r = key.verify(Scheme::Ecdsa, DigestAlg::Sha256, &[0; 32], &[0; 64]);
+    assert!(matches!(r, Err(SignError::Unsupported(_))), "{r:?}");
+    // An unknown curve likewise.
+    let spki = der::seq(&[&der::seq(&[&der::oid("1.2.840.10045.2.1"), &der::oid("1.3.132.0.10")]), &der::bit_string(&[4u8; 65])]);
+    let key = PublicKey::from_spki(&Tlv::parse_all(&spki).unwrap()).unwrap();
+    assert!(matches!(key.verify(Scheme::Ecdsa, DigestAlg::Sha256, &[0; 32], &[0; 64]), Err(SignError::Unsupported(_))));
+}
+
+// ECDSA signatures by OpenSSL 3 over a digest of "hello": (SubjectPublicKeyInfo, digest, DER signature).
+const P521: (&str, &str, &str) = (
+    "30819b301006072a8648ce3d020106052b8104002303818600040079586325f44d28973f270dcb9595a6309b93c3898eedb901b08873694c690265e61c1cbf5b1a339cacdcfe3ece7e00744bf6ed158d663209c8acf378ddda2e824100b1386a84a2efa8d4f78b6cf7018e58fac5bb9a57f33b3ef584649ba57910a163ba026245ad9e1b93597b5db1f05431267b3953c205312d0c8bf0d910eef237f438",
+    "9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca72323c3d99ba5c11d7c7acc6e14b8c5da0c4663475c2e5c3adef46f73bcdec043",
+    "30818802420156bae253f050fc9202661280cbb8b1eedb8d4767aee63afdd130d376f50a18097902d0c6bd17eb8e4b4383f355751f3578e06850d5f3dfd8a86f3085e7100535b4024201f92f6f722290652195edf7b3168a91425a4e8a70386e06af6bceafd8a5f26dc19e5c13e7566e789d9459433e911e439819fdc350ea8ab1df6421257eaa55e23cf8",
+);
+const BP256: (&str, &str, &str) = (
+    "305a301406072a8648ce3d020106092b2403030208010107034200049ba05e64295ad9b86295d9cfa717a2549474e83abb2825be32a0fae5297b07344f9e9018cf394001f98d634680b1e20be49f6118c726fdad4b11ccae99b95358",
+    "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "304402203815740bcccfdec285f1e168f28b4529bb39eba2683085260653c7a53dd2e69e022048ba910ce1f9141d8213fa1804a3d548271e0b9c307f6b26c80951be7e7a59a2",
+);
+const BP384: (&str, &str, &str) = (
+    "307a301406072a8648ce3d020106092b240303020801010b03620004874bc125ea23dd5553b1e5440c5cb064032f9a6cbdea271745232ade525b082951d0b251a45b2af74d3325dbe7872f9635b6223c6b2cd4d7f24a50fd9058f946a154919adb24e268975df951e561884b14f899bc87af0820c50f3b706b7acb4c",
+    "59e1748777448c69de6b800d7a33bbfb9ff1b463e44354c3553bcdb9c666fa90125a3c79f90397bdf5f6a13de828684f",
+    "30640230284776ae1458b137bfe0f1628193983ae8bd5d58d84957fb215da42c5ba0e48400aaba4960b6e0a23aa8d7c20084cbba02301000b700ae6d946ad032f7a08e64c565bb6227e722edd2813dcbc5dfa79d099cf93ea8d48b4293869942a4f68671a915",
+);
+
+#[test]
+fn verifies_ecdsa_on_p521_and_the_brainpool_curves() {
+    use pdfcraft_sign::der::Tlv;
+    use pdfcraft_sign::keys::{DigestAlg, Scheme};
+    for (name, (spki, digest, sig), alg, describe) in [
+        ("P-521", P521, DigestAlg::Sha512, "ECDSA P-521"),
+        ("brainpoolP256r1", BP256, DigestAlg::Sha256, "ECDSA brainpoolP256r1"),
+        ("brainpoolP384r1", BP384, DigestAlg::Sha384, "ECDSA brainpoolP384r1"),
+    ] {
+        let spki = unhex(spki);
+        let key = PublicKey::from_spki(&Tlv::parse_all(&spki).unwrap()).unwrap();
+        assert_eq!(key.describe(), describe);
+        assert_eq!(key.spki(), spki, "{name}: re-encodes");
+        let (digest, sig) = (unhex(digest), unhex(sig));
+        assert!(key.verify(Scheme::Ecdsa, alg, &digest, &sig).unwrap(), "{name}");
+        let mut bad = digest.clone();
+        bad[0] ^= 1;
+        assert!(!key.verify(Scheme::Ecdsa, alg, &bad, &sig).unwrap(), "{name}: other digest");
+        // The digest named by the algorithm identifier may be shorter than the curve (SHA-256 on
+        // P-521 etc.): that is a different digest, so it must not verify this signature.
+        assert!(!key.verify(Scheme::Ecdsa, alg, &digest[..digest.len() / 2], &sig).unwrap(), "{name}: short digest");
+    }
 }

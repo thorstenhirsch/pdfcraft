@@ -9,12 +9,14 @@ use crate::der::{self, Tlv, tag};
 
 pub mod oid {
     pub const SHA1: &str = "1.3.14.3.2.26";
+    pub const SHA224: &str = "2.16.840.1.101.3.4.2.4";
     pub const SHA256: &str = "2.16.840.1.101.3.4.2.1";
     pub const SHA384: &str = "2.16.840.1.101.3.4.2.2";
     pub const SHA512: &str = "2.16.840.1.101.3.4.2.3";
     pub const RSA: &str = "1.2.840.113549.1.1.1";
     pub const RSA_SHA1: &str = "1.2.840.113549.1.1.5";
     pub const RSA_PSS: &str = "1.2.840.113549.1.1.10";
+    pub const RSA_SHA224: &str = "1.2.840.113549.1.1.14";
     pub const RSA_SHA256: &str = "1.2.840.113549.1.1.11";
     pub const RSA_SHA384: &str = "1.2.840.113549.1.1.12";
     pub const RSA_SHA512: &str = "1.2.840.113549.1.1.13";
@@ -22,7 +24,11 @@ pub mod oid {
     pub const EC: &str = "1.2.840.10045.2.1";
     pub const P256: &str = "1.2.840.10045.3.1.7";
     pub const P384: &str = "1.3.132.0.34";
+    pub const P521: &str = "1.3.132.0.35";
+    pub const BRAINPOOL_P256: &str = "1.3.36.3.3.2.8.1.1.7";
+    pub const BRAINPOOL_P384: &str = "1.3.36.3.3.2.8.1.1.11";
     pub const ECDSA_SHA1: &str = "1.2.840.10045.4.1";
+    pub const ECDSA_SHA224: &str = "1.2.840.10045.4.3.1";
     pub const ECDSA_SHA256: &str = "1.2.840.10045.4.3.2";
     pub const ECDSA_SHA384: &str = "1.2.840.10045.4.3.3";
     pub const ECDSA_SHA512: &str = "1.2.840.10045.4.3.4";
@@ -32,6 +38,7 @@ pub mod oid {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DigestAlg {
     Sha1,
+    Sha224,
     Sha256,
     Sha384,
     Sha512,
@@ -41,6 +48,7 @@ impl DigestAlg {
     pub fn from_oid(o: &str) -> Option<DigestAlg> {
         Some(match o {
             oid::SHA1 => DigestAlg::Sha1,
+            oid::SHA224 => DigestAlg::Sha224,
             oid::SHA256 => DigestAlg::Sha256,
             oid::SHA384 => DigestAlg::Sha384,
             oid::SHA512 => DigestAlg::Sha512,
@@ -51,6 +59,7 @@ impl DigestAlg {
     pub fn oid(self) -> &'static str {
         match self {
             DigestAlg::Sha1 => oid::SHA1,
+            DigestAlg::Sha224 => oid::SHA224,
             DigestAlg::Sha256 => oid::SHA256,
             DigestAlg::Sha384 => oid::SHA384,
             DigestAlg::Sha512 => oid::SHA512,
@@ -60,6 +69,7 @@ impl DigestAlg {
     pub fn name(self) -> &'static str {
         match self {
             DigestAlg::Sha1 => "SHA-1",
+            DigestAlg::Sha224 => "SHA-224",
             DigestAlg::Sha256 => "SHA-256",
             DigestAlg::Sha384 => "SHA-384",
             DigestAlg::Sha512 => "SHA-512",
@@ -77,9 +87,21 @@ impl DigestAlg {
         }
         match self {
             DigestAlg::Sha1 => run::<sha1::Sha1>(parts),
+            DigestAlg::Sha224 => run::<sha2::Sha224>(parts),
             DigestAlg::Sha256 => run::<sha2::Sha256>(parts),
             DigestAlg::Sha384 => run::<sha2::Sha384>(parts),
             DigestAlg::Sha512 => run::<sha2::Sha512>(parts),
+        }
+    }
+
+    /// The digest length in bytes.
+    pub fn output_len(self) -> usize {
+        match self {
+            DigestAlg::Sha1 => 20,
+            DigestAlg::Sha224 => 28,
+            DigestAlg::Sha256 => 32,
+            DigestAlg::Sha384 => 48,
+            DigestAlg::Sha512 => 64,
         }
     }
 
@@ -104,6 +126,7 @@ pub fn signature_algorithm(alg: &Tlv<'_>) -> Result<(Scheme, Option<DigestAlg>),
     Ok(match o.as_str() {
         oid::RSA => (Scheme::RsaPkcs1, None),
         oid::RSA_SHA1 => (Scheme::RsaPkcs1, Some(DigestAlg::Sha1)),
+        oid::RSA_SHA224 => (Scheme::RsaPkcs1, Some(DigestAlg::Sha224)),
         oid::RSA_SHA256 => (Scheme::RsaPkcs1, Some(DigestAlg::Sha256)),
         oid::RSA_SHA384 => (Scheme::RsaPkcs1, Some(DigestAlg::Sha384)),
         oid::RSA_SHA512 => (Scheme::RsaPkcs1, Some(DigestAlg::Sha512)),
@@ -121,6 +144,7 @@ pub fn signature_algorithm(alg: &Tlv<'_>) -> Result<(Scheme, Option<DigestAlg>),
             (Scheme::RsaPss, Some(hash))
         }
         oid::ECDSA_SHA1 => (Scheme::Ecdsa, Some(DigestAlg::Sha1)),
+        oid::ECDSA_SHA224 => (Scheme::Ecdsa, Some(DigestAlg::Sha224)),
         oid::ECDSA_SHA256 => (Scheme::Ecdsa, Some(DigestAlg::Sha256)),
         oid::ECDSA_SHA384 => (Scheme::Ecdsa, Some(DigestAlg::Sha384)),
         oid::ECDSA_SHA512 => (Scheme::Ecdsa, Some(DigestAlg::Sha512)),
@@ -132,9 +156,22 @@ pub fn signature_algorithm(alg: &Tlv<'_>) -> Result<(Scheme, Option<DigestAlg>),
 /// A public key from a `SubjectPublicKeyInfo`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PublicKey {
-    Rsa { n: Vec<u8>, e: Vec<u8> },
+    Rsa {
+        n: Vec<u8>,
+        e: Vec<u8>,
+    },
     P256(Vec<u8>),
     P384(Vec<u8>),
+    /// Verification only (no signing).
+    P521(Vec<u8>),
+    BrainpoolP256(Vec<u8>),
+    BrainpoolP384(Vec<u8>),
+    /// A key algorithm or curve PdfCraft can't check signatures with. The certificate still
+    /// parses (so its name and dates show); verifying with it gives [`SignError::Unsupported`].
+    Unsupported {
+        what: String,
+        spki: Vec<u8>,
+    },
 }
 
 impl PublicKey {
@@ -143,7 +180,17 @@ impl PublicKey {
     pub fn key_bits(&self) -> Vec<u8> {
         match self {
             PublicKey::Rsa { n, e } => der::seq(&[&der::uint(n), &der::uint(e)]),
-            PublicKey::P256(bits) | PublicKey::P384(bits) => bits.clone(),
+            PublicKey::P256(bits)
+            | PublicKey::P384(bits)
+            | PublicKey::P521(bits)
+            | PublicKey::BrainpoolP256(bits)
+            | PublicKey::BrainpoolP384(bits) => bits.clone(),
+            // The BIT STRING of the stored SubjectPublicKeyInfo (empty if it doesn't parse).
+            PublicKey::Unsupported { spki, .. } => Tlv::parse(spki)
+                .ok()
+                .and_then(|(t, _)| t.children().ok())
+                .and_then(|c| c.get(1).and_then(|k| k.bits().ok().map(<[u8]>::to_vec)))
+                .unwrap_or_default(),
         }
     }
 
@@ -162,9 +209,12 @@ impl PublicKey {
             oid::EC => match alg.get(1).map(|c| c.oid()).transpose()?.as_deref() {
                 Some(oid::P256) => Ok(PublicKey::P256(bits.to_vec())),
                 Some(oid::P384) => Ok(PublicKey::P384(bits.to_vec())),
-                other => Err(SignError::Unsupported(format!("elliptic curve {}", other.unwrap_or("?")))),
+                Some(oid::P521) => Ok(PublicKey::P521(bits.to_vec())),
+                Some(oid::BRAINPOOL_P256) => Ok(PublicKey::BrainpoolP256(bits.to_vec())),
+                Some(oid::BRAINPOOL_P384) => Ok(PublicKey::BrainpoolP384(bits.to_vec())),
+                other => Ok(PublicKey::Unsupported { what: format!("elliptic curve {}", other.unwrap_or("?")), spki: spki.raw.to_vec() }),
             },
-            other => Err(SignError::Unsupported(format!("public key algorithm {other}"))),
+            other => Ok(PublicKey::Unsupported { what: format!("public key algorithm {other}"), spki: spki.raw.to_vec() }),
         }
     }
 
@@ -177,6 +227,10 @@ impl PublicKey {
             }
             PublicKey::P256(p) => der::seq(&[&der::seq(&[&der::oid(oid::EC), &der::oid(oid::P256)]), &der::bit_string(p)]),
             PublicKey::P384(p) => der::seq(&[&der::seq(&[&der::oid(oid::EC), &der::oid(oid::P384)]), &der::bit_string(p)]),
+            PublicKey::P521(p) => der::seq(&[&der::seq(&[&der::oid(oid::EC), &der::oid(oid::P521)]), &der::bit_string(p)]),
+            PublicKey::BrainpoolP256(p) => der::seq(&[&der::seq(&[&der::oid(oid::EC), &der::oid(oid::BRAINPOOL_P256)]), &der::bit_string(p)]),
+            PublicKey::BrainpoolP384(p) => der::seq(&[&der::seq(&[&der::oid(oid::EC), &der::oid(oid::BRAINPOOL_P384)]), &der::bit_string(p)]),
+            PublicKey::Unsupported { spki, .. } => spki.clone(),
         }
     }
 
@@ -186,43 +240,120 @@ impl PublicKey {
             PublicKey::Rsa { n, .. } => format!("RSA {}-bit", n.len() * 8),
             PublicKey::P256(_) => "ECDSA P-256".into(),
             PublicKey::P384(_) => "ECDSA P-384".into(),
+            PublicKey::P521(_) => "ECDSA P-521".into(),
+            PublicKey::BrainpoolP256(_) => "ECDSA brainpoolP256r1".into(),
+            PublicKey::BrainpoolP384(_) => "ECDSA brainpoolP384r1".into(),
+            PublicKey::Unsupported { what, .. } => format!("unsupported ({what})"),
         }
     }
 
-    /// Check `sig` over a message whose digest (with `alg`) is `digest`.
+    /// Check `sig` over a message whose digest (with `alg`) is `digest`. Encodings are read
+    /// leniently (see [`rsa_pkcs1_verify`], [`ecdsa_rs`]); the cryptographic check never is.
+    /// `Err(Unsupported)` means "can't tell", as opposed to `Ok(false)`: "doesn't match".
     pub fn verify(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8]) -> Result<bool, SignError> {
         match (self, scheme) {
+            (PublicKey::Unsupported { what, .. }, _) => Err(SignError::Unsupported(what.clone())),
             (PublicKey::Rsa { n, e }, Scheme::RsaPkcs1 | Scheme::RsaPss) => {
-                use rsa::{BoxedUint, Pkcs1v15Sign, RsaPublicKey, pss::Pss};
+                use rsa::{BoxedUint, RsaPublicKey};
                 let key = RsaPublicKey::new(BoxedUint::from_be_slice_vartime(n), BoxedUint::from_be_slice_vartime(e))
                     .map_err(|e| SignError::Malformed(format!("RSA key: {e}")))?;
-                let ok = match (scheme, alg) {
-                    (Scheme::RsaPkcs1, DigestAlg::Sha1) => key.verify(Pkcs1v15Sign::new::<sha1::Sha1>(), digest, sig),
-                    (Scheme::RsaPkcs1, DigestAlg::Sha256) => key.verify(Pkcs1v15Sign::new::<sha2::Sha256>(), digest, sig),
-                    (Scheme::RsaPkcs1, DigestAlg::Sha384) => key.verify(Pkcs1v15Sign::new::<sha2::Sha384>(), digest, sig),
-                    (Scheme::RsaPkcs1, DigestAlg::Sha512) => key.verify(Pkcs1v15Sign::new::<sha2::Sha512>(), digest, sig),
-                    (_, DigestAlg::Sha1) => key.verify(Pss::<sha1::Sha1>::new(), digest, sig),
-                    (_, DigestAlg::Sha256) => key.verify(Pss::<sha2::Sha256>::new(), digest, sig),
-                    (_, DigestAlg::Sha384) => key.verify(Pss::<sha2::Sha384>::new(), digest, sig),
-                    (_, DigestAlg::Sha512) => key.verify(Pss::<sha2::Sha512>::new(), digest, sig),
-                };
-                Ok(ok.is_ok())
+                Ok(match (scheme, alg) {
+                    (Scheme::RsaPkcs1, _) => rsa_pkcs1_verify(&key, alg, digest, sig),
+                    // Any salt length is accepted: it is recovered from the signature itself.
+                    (_, DigestAlg::Sha1) => key.verify(pss::<sha1::Sha1>(), digest, sig).is_ok(),
+                    (_, DigestAlg::Sha224) => key.verify(pss::<sha2::Sha224>(), digest, sig).is_ok(),
+                    (_, DigestAlg::Sha256) => key.verify(pss::<sha2::Sha256>(), digest, sig).is_ok(),
+                    (_, DigestAlg::Sha384) => key.verify(pss::<sha2::Sha384>(), digest, sig).is_ok(),
+                    (_, DigestAlg::Sha512) => key.verify(pss::<sha2::Sha512>(), digest, sig).is_ok(),
+                })
             }
             (PublicKey::P256(p), Scheme::Ecdsa) => {
                 use p256::ecdsa::signature::hazmat::PrehashVerifier;
                 let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(p).map_err(|_| SignError::Malformed("P-256 key".into()))?;
-                let Ok(s) = p256::ecdsa::Signature::from_der(sig) else { return Ok(false) };
+                let Some(s) = ecdsa_rs(sig, 32).and_then(|rs| p256::ecdsa::Signature::from_slice(&rs).ok()) else { return Ok(false) };
                 Ok(key.verify_prehash(digest, &s).is_ok())
             }
             (PublicKey::P384(p), Scheme::Ecdsa) => {
                 use p384::ecdsa::signature::hazmat::PrehashVerifier;
                 let key = p384::ecdsa::VerifyingKey::from_sec1_bytes(p).map_err(|_| SignError::Malformed("P-384 key".into()))?;
-                let Ok(s) = p384::ecdsa::Signature::from_der(sig) else { return Ok(false) };
+                let Some(s) = ecdsa_rs(sig, 48).and_then(|rs| p384::ecdsa::Signature::from_slice(&rs).ok()) else { return Ok(false) };
+                Ok(key.verify_prehash(digest, &s).is_ok())
+            }
+            (PublicKey::P521(p), Scheme::Ecdsa) => {
+                use p521::ecdsa::signature::hazmat::PrehashVerifier;
+                let key = p521::ecdsa::VerifyingKey::from_sec1_bytes(p).map_err(|_| SignError::Malformed("P-521 key".into()))?;
+                let Some(s) = ecdsa_rs(sig, 66).and_then(|rs| p521::ecdsa::Signature::from_slice(&rs).ok()) else { return Ok(false) };
+                Ok(key.verify_prehash(digest, &s).is_ok())
+            }
+            (PublicKey::BrainpoolP256(p), Scheme::Ecdsa) => {
+                use ecdsa::signature::hazmat::PrehashVerifier;
+                type Curve = bp256::BrainpoolP256r1;
+                let key = ecdsa::VerifyingKey::<Curve>::from_sec1_bytes(p).map_err(|_| SignError::Malformed("brainpoolP256r1 key".into()))?;
+                let Some(s) = ecdsa_rs(sig, 32).and_then(|rs| ecdsa::Signature::<Curve>::from_slice(&rs).ok()) else { return Ok(false) };
+                Ok(key.verify_prehash(digest, &s).is_ok())
+            }
+            (PublicKey::BrainpoolP384(p), Scheme::Ecdsa) => {
+                use ecdsa::signature::hazmat::PrehashVerifier;
+                type Curve = bp384::BrainpoolP384r1;
+                let key = ecdsa::VerifyingKey::<Curve>::from_sec1_bytes(p).map_err(|_| SignError::Malformed("brainpoolP384r1 key".into()))?;
+                let Some(s) = ecdsa_rs(sig, 48).and_then(|rs| ecdsa::Signature::<Curve>::from_slice(&rs).ok()) else { return Ok(false) };
                 Ok(key.verify_prehash(digest, &s).is_ok())
             }
             _ => Ok(false),
         }
     }
+}
+
+/// RSASSA-PSS padding that takes the salt length from the signature (`Pss::new` insists on the
+/// digest length, but signers use 0, the digest length or anything in between).
+fn pss<D: sha2::Digest>() -> rsa::pss::Pss<D> {
+    rsa::pss::Pss { blinded: false, digest: D::new(), salt_len: None }
+}
+
+/// RSASSA-PKCS1-v1_5 as the field really has it: the standard DigestInfo (with a NULL
+/// parameter), the same without the NULL (RFC 8017 §9.2 note 1: old signers omit it), or the bare
+/// digest with no DigestInfo at all.
+fn rsa_pkcs1_verify(key: &rsa::RsaPublicKey, alg: DigestAlg, digest: &[u8], sig: &[u8]) -> bool {
+    use rsa::Pkcs1v15Sign;
+    let standard = match alg {
+        DigestAlg::Sha1 => Pkcs1v15Sign::new::<sha1::Sha1>(),
+        DigestAlg::Sha224 => Pkcs1v15Sign::new::<sha2::Sha224>(),
+        DigestAlg::Sha256 => Pkcs1v15Sign::new::<sha2::Sha256>(),
+        DigestAlg::Sha384 => Pkcs1v15Sign::new::<sha2::Sha384>(),
+        DigestAlg::Sha512 => Pkcs1v15Sign::new::<sha2::Sha512>(),
+    };
+    if key.verify(standard, digest, sig).is_ok() {
+        return true;
+    }
+    let id = der::algorithm(alg.oid(), None);
+    let info = der::seq(&[&id, &der::octets(digest)]);
+    let prefix = info.get(..info.len().saturating_sub(digest.len())).unwrap_or_default();
+    let no_null = Pkcs1v15Sign { hash_len: Some(alg.output_len()), prefix: prefix.into() };
+    key.verify(no_null, digest, sig).is_ok() || key.verify(Pkcs1v15Sign::new_unprefixed(), digest, sig).is_ok()
+}
+
+/// An ECDSA signature as the fixed-width `r ‖ s` the curve crates read: from the standard DER
+/// `SEQUENCE { INTEGER r, INTEGER s }` (also BER, and integers with redundant leading zeros or
+/// the sign byte missing), or already raw `r ‖ s` as PKCS #11 tokens return it.
+fn ecdsa_rs(sig: &[u8], field_len: usize) -> Option<Vec<u8>> {
+    let pad = |int: &[u8]| -> Option<Vec<u8>> {
+        let int = &int[int.iter().position(|b| *b != 0).unwrap_or(int.len())..];
+        let zeros = field_len.checked_sub(int.len())?;
+        Some(std::iter::repeat_n(0u8, zeros).chain(int.iter().copied()).collect())
+    };
+    if let Ok((t, rest)) = Tlv::parse(sig)
+        && t.tag == tag::SEQUENCE
+        && rest.iter().all(|b| *b == 0)
+        && let Ok(parts) = t.children()
+        && let [r, s] = parts.as_slice()
+        && r.tag == tag::INTEGER
+        && s.tag == tag::INTEGER
+    {
+        let mut out = pad(r.value)?;
+        out.extend(pad(s.value)?);
+        return Some(out);
+    }
+    (sig.len() == field_len * 2).then(|| sig.to_vec())
 }
 
 enum Inner {
@@ -372,10 +503,12 @@ impl PrivateKey {
     pub fn signature_algorithm(&self, alg: DigestAlg) -> Vec<u8> {
         match (&self.public, alg) {
             (PublicKey::Rsa { .. }, DigestAlg::Sha1) => der::algorithm(oid::RSA_SHA1, Some(&der::null())),
+            (PublicKey::Rsa { .. }, DigestAlg::Sha224) => der::algorithm(oid::RSA_SHA224, Some(&der::null())),
             (PublicKey::Rsa { .. }, DigestAlg::Sha256) => der::algorithm(oid::RSA_SHA256, Some(&der::null())),
             (PublicKey::Rsa { .. }, DigestAlg::Sha384) => der::algorithm(oid::RSA_SHA384, Some(&der::null())),
             (PublicKey::Rsa { .. }, DigestAlg::Sha512) => der::algorithm(oid::RSA_SHA512, Some(&der::null())),
             (_, DigestAlg::Sha1) => der::algorithm(oid::ECDSA_SHA1, None),
+            (_, DigestAlg::Sha224) => der::algorithm(oid::ECDSA_SHA224, None),
             (_, DigestAlg::Sha256) => der::algorithm(oid::ECDSA_SHA256, None),
             (_, DigestAlg::Sha384) => der::algorithm(oid::ECDSA_SHA384, None),
             (_, DigestAlg::Sha512) => der::algorithm(oid::ECDSA_SHA512, None),
@@ -392,8 +525,8 @@ impl PrivateKey {
 
     /// Sign `msg` (hashed with `alg`). New signatures never use SHA-1.
     pub fn sign(&self, alg: DigestAlg, msg: &[u8]) -> Result<Vec<u8>, SignError> {
-        if alg == DigestAlg::Sha1 {
-            return Err(SignError::Unsupported("SHA-1 for new signatures".into()));
+        if matches!(alg, DigestAlg::Sha1 | DigestAlg::Sha224) {
+            return Err(SignError::Unsupported(format!("{} for new signatures", alg.name())));
         }
         match &self.inner {
             #[cfg(not(target_arch = "wasm32"))]
