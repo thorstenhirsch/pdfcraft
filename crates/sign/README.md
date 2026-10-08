@@ -62,6 +62,12 @@ ECDSA P-256/P-384; the store integration is tested with software-backed keys.
   DER or raw `r ‖ s`, and `adbe.x509.rsa_sha1`. Digest and signature value are always checked
   over the exact bytes. Every tolerated irregularity is listed in the signature's details. What
   PdfCraft can't check (an unknown algorithm or curve) is *unknown*, never *invalid*.
+- **Chains are checked, not just linked.** `x509::build_chain` only takes an issuer whose key
+  verifies the certificate below it *and* that may issue: `basicConstraints` CA:TRUE (an old v1
+  self-signed root without constraints counts), `keyCertSign` when it has a key usage, a
+  `pathLenConstraint` that allows the CAs below it, and, given the signing time, validity then.
+  Certificates embedded in a document are in the pool too, so an ordinary subscriber certificate
+  can never vouch for another one; when an issuer is refused, the signature's details say why.
 - **Validation algorithms:** digests SHA-1, SHA-224/256/384/512, SHA-512/224, SHA-512/256,
   SHA3-224/256/384/512 and RIPEMD-160. RSA PKCS #1 v1.5 and RSASSA-PSS (the hash, MGF1 hash and
   salt length the signature declares), ECDSA on P-256, P-384, P-521, brainpoolP256r1, P384r1 and
