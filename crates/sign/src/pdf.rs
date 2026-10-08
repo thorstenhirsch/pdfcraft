@@ -318,7 +318,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
         }
         let o = doc.get(r);
         let Some(d) = o.as_dict() else { continue };
-        if d.name(b"Type") != Some(b"Sig") || d.name(b"SubFilter") != Some(b"ETSI.RFC3161") || !d.contains(b"ByteRange") {
+        if !is_doc_timestamp(d) || !d.contains(b"ByteRange") {
             continue;
         }
         let mut info = SignatureInfo {
@@ -369,7 +369,23 @@ fn unhex(s: &[u8]) -> Option<Vec<u8>> {
     digits.chunks(2).map(|p| Some(val(p[0])? << 4 | p.get(1).map_or(Some(0), |c| val(*c))?)).collect()
 }
 
+/// A document timestamp dictionary: `/SubFilter /ETSI.RFC3161`, typed `/DocTimeStamp`
+/// (ISO 32000-2 §12.8.5) or, as older writers have it, `/Sig`.
+fn is_doc_timestamp(d: &Dict) -> bool {
+    d.name(b"SubFilter") == Some(b"ETSI.RFC3161") && matches!(d.name(b"Type"), Some(b"DocTimeStamp" | b"Sig"))
+}
+
 fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
+    // A document timestamp can also be the value of a signature field (Documenso writes
+    // `Timestamp_1` that way). Its `/Contents` is a bare RFC 3161 token, not a signature over the
+    // document, so it must not be read as one.
+    if is_doc_timestamp(v) {
+        info.sub_filter = Some("ETSI.RFC3161".to_string());
+        info.doc_timestamp = true;
+        info.timestamp = true;
+        validate_doc_timestamp(doc, bytes, v, info, cache, trust);
+        return;
+    }
     info.date = text(doc, v, b"M");
     info.reason = text(doc, v, b"Reason");
     info.location = text(doc, v, b"Location");
@@ -756,7 +772,7 @@ pub(crate) fn signature_contents(doc: &Document) -> Vec<Vec<u8>> {
         let r = ObjRef { num, generation: doc.generation(num) };
         let o = doc.get(r);
         let Some(d) = o.as_dict() else { continue };
-        if d.name(b"Type") == Some(b"Sig") && d.name(b"SubFilter") == Some(b"ETSI.RFC3161") {
+        if is_doc_timestamp(d) {
             add(d, Some(r));
         }
     }
@@ -1376,7 +1392,7 @@ pub fn timestamp_document(doc: &Document, tsa: &dyn crate::timestamp::TimestampA
     }
     let mut doc = doc.clone();
     let mut v = Dict::new();
-    v.set(b"Type".to_vec(), Object::name("Sig"));
+    v.set(b"Type".to_vec(), Object::name("DocTimeStamp"));
     v.set(b"Filter".to_vec(), Object::name("Adobe.PPKLite"));
     v.set(b"SubFilter".to_vec(), Object::name("ETSI.RFC3161"));
     v.set(b"ByteRange".to_vec(), Object::Array([0].iter().chain(BR_MARK.iter()).map(|n| Object::Int(*n)).collect()));
