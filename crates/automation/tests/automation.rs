@@ -1714,6 +1714,43 @@ fn digital_ids_signing_and_validation_through_tools() {
 }
 
 #[test]
+fn trust_sets_are_off_until_switched_on_through_sign_trust() {
+    let dir = workdir("trust_sets");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "country": "GB", "key": "p256", "password": "secret1", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret1", "out": "signed.pdf" }));
+    let status = |a: &mut Automation| ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"].as_str().unwrap().to_string();
+    assert_eq!(status(&mut a), "unknown", "nothing trusted by default");
+
+    // Defaults: no built-in roots, no lists.
+    let t = ok(&mut a, "sign_trust", json!({}));
+    assert_eq!((t["builtin_roots"].clone(), t["trust_lists"].as_array().map(Vec::len)), (json!(false), Some(0)));
+    assert_eq!(ok(&mut a, "sign_trust", json!({ "builtin_roots": true }))["builtin_roots"], true);
+    assert_eq!(status(&mut a), "unknown", "the built-in roots do not include Ada's certificate");
+    assert_eq!(ok(&mut a, "sign_trust", json!({ "builtin_roots": false }))["builtin_roots"], false);
+
+    // A trust list file (the certificate as DER), loaded by path.
+    let ada = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(dir.join("ada.p12")).unwrap(), "secret1").unwrap();
+    std::fs::write(dir.join("list.der"), &ada.certificate.raw).unwrap();
+    let t = ok(&mut a, "sign_trust", json!({ "eu_trusted_list": "list.der" }));
+    assert_eq!(t["trust_lists"][0]["name"], "EU Trusted List");
+    assert_eq!(t["trust_lists"][0]["certificates"], 1);
+    assert_eq!(t["trusted"].as_array().unwrap().len(), 0, "the list is kept apart from the user's certificates");
+    assert_eq!(status(&mut a), "valid");
+    // Bad input is refused and leaves the list as it was.
+    std::fs::write(dir.join("junk.der"), b"not certificates").unwrap();
+    assert!(matches!(a.call("sign_trust", &json!({ "eu_trusted_list": "junk.der" })), Err(ToolError::Failed(_))));
+    assert!(matches!(a.call("sign_trust", &json!({ "eu_trusted_list": "missing.der" })), Err(ToolError::Failed(_))));
+    assert!(matches!(a.call("sign_trust", &json!({ "eu_trusted_list": 5 })), Err(ToolError::InvalidArgs(_))));
+    assert!(a.call("sign_trust", &json!({ "eu_trusted_list": "../outside.der" })).is_err(), "paths stay inside the root");
+    assert_eq!(status(&mut a), "valid");
+    // Removing it makes the signer unknown again.
+    assert_eq!(ok(&mut a, "sign_trust", json!({ "eu_trusted_list": false }))["trust_lists"].as_array().map(Vec::len), Some(0));
+    assert_eq!(status(&mut a), "unknown");
+}
+
+#[test]
 fn optimizing_through_tools() {
     let dir = workdir("optimize");
     // A 2400 × 1600 photo-like JPEG at 600 dpi: a 4 × 2.67 inch page.

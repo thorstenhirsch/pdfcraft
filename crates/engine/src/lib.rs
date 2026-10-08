@@ -2844,7 +2844,38 @@ impl Session {
 
     /// Replace the trusted certificates and revalidate every open document's signatures.
     pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
-        self.trust = Arc::new(TrustStore { certs });
+        self.trust = Arc::new(TrustStore { certs, ..(*self.trust).clone() });
+        self.revalidate_signatures();
+    }
+
+    /// Whether the roots embedded in PdfCraft ([`pdfcraft_sign::trust::builtin_roots`]) are
+    /// trusted too. Off until the user switches it on; they are not part of
+    /// [`Session::trusted_certificates`].
+    pub fn builtin_roots(&self) -> bool {
+        self.trust.builtin_roots
+    }
+
+    /// Trust (or stop trusting) the embedded roots and revalidate every open document.
+    pub fn set_builtin_roots(&mut self, on: bool) {
+        self.trust = Arc::new(TrustStore { builtin_roots: on, ..(*self.trust).clone() });
+        self.revalidate_signatures();
+    }
+
+    /// The trust lists the user loaded (e.g. the EU Trusted Lists' qualified CAs), none by default.
+    pub fn trust_lists(&self) -> &[pdfcraft_sign::trust::TrustList] {
+        &self.trust.lists
+    }
+
+    /// Load `list` (replacing a list of the same name), or with `None` remove the list called
+    /// `name`, and revalidate every open document.
+    pub fn set_trust_list(&mut self, name: &str, list: Option<pdfcraft_sign::trust::TrustList>) {
+        let mut lists: Vec<_> = self.trust.lists.iter().filter(|l| l.name != name).cloned().collect();
+        lists.extend(list);
+        self.trust = Arc::new(TrustStore { lists, ..(*self.trust).clone() });
+        self.revalidate_signatures();
+    }
+
+    fn revalidate_signatures(&mut self) {
         for doc in &mut self.docs {
             doc.trust = self.trust.clone();
             if let Some(e) = doc.editor.as_ref() {

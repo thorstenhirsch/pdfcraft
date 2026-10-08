@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 
 use crate::{Args, Automation, Result, ToolError, failed, write_atomic};
 
+/// The name the EU Trusted List file is loaded under (`sign_trust eu_trusted_list`).
+const EU_LIST: &str = "EU Trusted List";
+
 fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
 }
@@ -220,6 +223,29 @@ impl Automation {
             }
         }
         self.session.set_trusted_certificates(certs);
-        Ok(json!({ "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>() }))
+        // The optional trust sets, both off until asked for.
+        if let Some(on) = a.opt_bool("builtin_roots")? {
+            self.session.set_builtin_roots(on);
+        }
+        match a.get("eu_trusted_list") {
+            None => {}
+            Some(Value::Bool(false) | Value::Null) => self.session.set_trust_list(EU_LIST, None),
+            Some(Value::String(p)) => {
+                let path = self.resolve(p, false)?;
+                let len = std::fs::metadata(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?.len();
+                if len > sign::trust::MAX_LIST_BYTES as u64 {
+                    return Err(failed(format!("{}: a trust list can't be over {} MiB", path.display(), sign::trust::MAX_LIST_BYTES >> 20)));
+                }
+                let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+                let list = sign::trust::TrustList::from_bytes(EU_LIST, &bytes).map_err(failed)?;
+                self.session.set_trust_list(EU_LIST, Some(list));
+            }
+            Some(_) => return Err(bad("eu_trusted_list must be the path of a trust list file, or false")),
+        }
+        Ok(json!({
+            "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>(),
+            "builtin_roots": self.session.builtin_roots(),
+            "trust_lists": self.session.trust_lists().iter().map(|l| json!({ "name": l.name, "certificates": l.certs.len() })).collect::<Vec<_>>(),
+        }))
     }
 }
