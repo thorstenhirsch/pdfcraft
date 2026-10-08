@@ -49,3 +49,24 @@ Over SHA-256("hello") with the key of `rsa-aes.p12`:
 `openssl dgst -sha256 -sign rsa.key` (standard DigestInfo); `openssl pkeyutl -sign -pkeyopt rsa_padding_mode:pkcs1`
 over a hand-built DigestInfo without the NULL parameter, and over the bare digest;
 `openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:0 -sign rsa.key`.
+
+### Other algorithms (hex constants in `tests/algorithms.rs`)
+
+All sign the message `hello` with throw-away keys, OpenSSL 3.6. RSA ones use the key of `rsa-aes.p12`.
+
+```sh
+cms() { openssl cms -sign -binary -in msg -outform DER "$@"; }
+cms -md sha3-256   -signer rsa.crt -inkey rsa.key -out c_rsa_sha3_256.der
+cms -md sha512-256 -signer rsa.crt -inkey rsa.key -out c_rsa_sha512_256.der
+cms -provider legacy -provider default -md ripemd160 -signer rsa.crt -inkey rsa.key -out c_rsa_ripemd160.der
+cms -md sha256 -signer rsa.crt -inkey rsa.key -keyopt rsa_padding_mode:pss -keyopt rsa_mgf1_md:sha1 -keyopt rsa_pss_saltlen:20 -out c_pss_sha256_mgf1sha1_salt20.der
+cms -md sha384 -signer rsa.crt -inkey rsa.key -keyopt rsa_padding_mode:pss -keyopt rsa_mgf1_md:sha256 -keyopt rsa_pss_saltlen:0 -out c_pss_sha384_mgf1sha256_salt0.der
+openssl req -x509 -newkey ed25519 -nodes -keyout ed.key -out ed.crt -subj "/CN=Test Signer Ed25519"
+cms -md sha512 -signer ed.crt -inkey ed.key -out c_ed25519.der
+openssl ecparam -name brainpoolP512r1 -genkey -noout -out bp512.key
+openssl req -x509 -new -key bp512.key -sha512 -out bp512.crt -subj "/CN=Test Signer BP512"
+cms -md sha512   -signer bp512.crt -inkey bp512.key -out c_bp512_sha512.der
+cms -md sha3-256 -signer bp512.crt -inkey bp512.key -out c_bp512_sha3_256.der
+openssl dgst -sha3-256   -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 -sign rsa.key -out pss_sha3_256.sig msg
+openssl dgst -sha512-256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:0  -sign rsa.key -out pss_sha512_256.sig msg
+```

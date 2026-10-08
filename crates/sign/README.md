@@ -62,8 +62,13 @@ ECDSA P-256/P-384; the store integration is tested with software-backed keys.
   DER or raw `r ‖ s`, and `adbe.x509.rsa_sha1`. Digest and signature value are always checked
   over the exact bytes. Every tolerated irregularity is listed in the signature's details. What
   PdfCraft can't check (an unknown algorithm or curve) is *unknown*, never *invalid*.
-- **Validation algorithms:** SHA-1/224/256/384/512; RSA, ECDSA on P-256, P-384, P-521,
-  brainpoolP256r1 and brainpoolP384r1 (verification only for the last three).
+- **Validation algorithms:** digests SHA-1, SHA-224/256/384/512, SHA-512/224, SHA-512/256,
+  SHA3-224/256/384/512 and RIPEMD-160. RSA PKCS #1 v1.5 and RSASSA-PSS (the hash, MGF1 hash and
+  salt length the signature declares), ECDSA on P-256, P-384, P-521, brainpoolP256r1, P384r1 and
+  P512r1 (also BSI "plain" ECDSA), and Ed25519 (RFC 8419, over the signed attributes).
+  Signing: RSA, P-256, P-384 with SHA-256/384/512. The RSA padding checks and brainpoolP512r1 are
+  written here (`rsa_pad`, `ec512`) on `crypto-bigint`, because the typed APIs of the `rsa` crate
+  and RustCrypto don't cover them.
 
 Oracles: poppler's `pdfsig` reports our signatures valid; OpenSSL reads our `.p12` files and
 verifies our CMS; `tests/data/openssl-signed.pdf` is a signature OpenSSL made, which we validate.

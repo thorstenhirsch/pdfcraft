@@ -120,6 +120,13 @@ impl SignedData {
     /// `Err(Unsupported)`: the signer's key algorithm can't be checked here.
     pub fn verify_signature(&self, cert: &Certificate, content_digest: &[u8]) -> Result<bool, SignError> {
         let s = &self.signer;
+        // EdDSA signs the message itself: with signed attributes, their DER encoding.
+        if s.scheme == Scheme::Ed25519 {
+            let Some(attrs) = &s.signed_attrs else {
+                return Err(SignError::Unsupported("Ed25519 signature without signed attributes".into()));
+            };
+            return cert.public_key.verify_message(s.scheme, attrs, &s.signature);
+        }
         // The signature algorithm names the digest it used; a bare `rsaEncryption` / `ecPublicKey`
         // uses the SignerInfo's digestAlgorithm. Some signers disagree, so try both.
         let mut algs = vec![s.scheme_digest.unwrap_or(s.digest)];

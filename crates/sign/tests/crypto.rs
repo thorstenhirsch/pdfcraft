@@ -289,15 +289,18 @@ fn unhex(s: &str) -> Vec<u8> {
 
 #[test]
 fn rsa_signatures_are_read_with_every_digestinfo_variant() {
-    use pdfcraft_sign::keys::{DigestAlg, Scheme};
+    use pdfcraft_sign::keys::{DigestAlg, PssParams, Scheme};
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
     let key = &id.certificate.public_key;
     let digest = DigestAlg::Sha256.digest(&[b"hello"]);
     for (name, sig) in [("standard", RSA_STD), ("no NULL", RSA_NO_NULL), ("bare digest", RSA_BARE)] {
         assert!(key.verify(Scheme::RsaPkcs1, DigestAlg::Sha256, &digest, &unhex(sig)).unwrap(), "{name}");
     }
-    // PSS with any salt length (the parameters aren't consulted for it).
-    assert!(key.verify(Scheme::RsaPss, DigestAlg::Sha256, &digest, &unhex(RSA_PSS_SALT0)).unwrap());
+    // PSS with the salt length it declares, or any when none is declared.
+    let pss = |salt_len| Scheme::RsaPss(PssParams { mgf: DigestAlg::Sha256, salt_len });
+    assert!(key.verify(pss(Some(0)), DigestAlg::Sha256, &digest, &unhex(RSA_PSS_SALT0)).unwrap());
+    assert!(key.verify(pss(None), DigestAlg::Sha256, &digest, &unhex(RSA_PSS_SALT0)).unwrap(), "salt length recovered");
+    assert!(!key.verify(pss(Some(32)), DigestAlg::Sha256, &digest, &unhex(RSA_PSS_SALT0)).unwrap(), "declared salt length is enforced");
     // The check itself is not relaxed: another digest, a flipped bit, or the wrong scheme fail.
     let other = DigestAlg::Sha256.digest(&[b"hellp"]);
     let mut flipped = unhex(RSA_STD);
@@ -306,7 +309,7 @@ fn rsa_signatures_are_read_with_every_digestinfo_variant() {
         assert!(!key.verify(Scheme::RsaPkcs1, DigestAlg::Sha256, &other, &unhex(sig)).unwrap());
     }
     assert!(!key.verify(Scheme::RsaPkcs1, DigestAlg::Sha256, &digest, &flipped).unwrap());
-    assert!(!key.verify(Scheme::RsaPss, DigestAlg::Sha256, &digest, &unhex(RSA_STD)).unwrap());
+    assert!(!key.verify(pss(None), DigestAlg::Sha256, &digest, &unhex(RSA_STD)).unwrap());
 }
 
 #[test]
