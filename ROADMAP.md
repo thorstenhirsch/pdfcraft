@@ -198,6 +198,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-10-14 (M9, EU Trusted Lists file):** `cargo xtask trust-lists [--out FILE]` builds `dist/trust/eutl-qualified-ca.der`, the CA certificates of the granted qualified CA services (`CA/QC`) of the 30 national EU Trusted Lists, as the file for the `eu_trusted_list` argument of `sign_trust` (added by #622; until that lands the tool can't load it) (875 certificates, 1.4 MB, the same bytes on a rerun with the same lists). Services that issue only web site certificates (QWAC CAs: 113 of 977) are left out, as is the UK's frozen list. It is a developer tool like `cargo xtask models`: nothing is embedded and the app gains no network access. Fetched over HTTPS only (a list pointed to with `http://` is fetched with `https://`), size-capped; the XML signatures of the lists are not checked yet. Missing: qualified time-stamp services (TSA/QTST), the status at signing time (`ServiceHistory`), checking the lists' signatures. Overall estimate unchanged.
 
 - **2026-10-24 (M14, #4253):** The annotation quick bar remembers Keep tool selected across restarts, including unpinning. Old and malformed settings keep safe defaults; the opt-in UI control channel reads and changes the same preference. Estimates unchanged.
 
